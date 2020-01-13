@@ -2,6 +2,7 @@ import Cocoa
 import Quartz
 import UserNotifications
 import StoreKit
+import Defaults
 
 final class ConversionCompletedViewController: NSViewController {
 	@IBOutlet private var draggableFileWrapper: NSView!
@@ -37,13 +38,13 @@ final class ConversionCompletedViewController: NSViewController {
 		setUpDropView()
 		setUp(url: gifUrl)
 
-		if #available(macOS 10.14, *), !NSApp.isActive || view.window?.isVisible == false {
+		if !NSApp.isActive || view.window?.isVisible == false {
 			let notification = UNMutableNotificationContent()
 			notification.title = "Conversion Completed"
 			notification.subtitle = conversion.video.filename
 			let request = UNNotificationRequest(identifier: "conversionCompleted", content: notification, trigger: nil)
 			// UNUserNotificationCenter.current().add(request)
-			(AppDelegate.shared.notificationCenter as? UNUserNotificationCenter)?.add(request)
+			AppDelegate.shared.notificationCenter.add(request)
 		}
 	}
 
@@ -54,7 +55,10 @@ final class ConversionCompletedViewController: NSViewController {
 		view.window?.makeFirstResponder(self)
 
 		if wrapperView.isHidden {
-			draggableFile.layer?.animateScaleMove(fromScale: 3, fromY: view.frame.height + draggableFile.frame.size.height)
+			draggableFile.layer?.animateScaleMove(
+				fromScale: 3,
+				fromY: Double(view.frame.height + draggableFile.frame.size.height)
+			)
 			wrapperView.fadeIn(duration: 0.5, delay: 0.15, completion: nil)
 		}
 
@@ -66,7 +70,7 @@ final class ConversionCompletedViewController: NSViewController {
 			self.tooltip.show(from: self.draggableFile, preferredEdge: .maxY)
 		}
 
-		if #available(macOS 10.14, *), Defaults[.successfulConversionsCount] == 5 {
+		if Defaults[.successfulConversionsCount] == 5 {
 			SKStoreReviewController.requestReview()
 		}
 	}
@@ -136,10 +140,13 @@ final class ConversionCompletedViewController: NSViewController {
 					return
 				}
 
-				do {
-					try FileManager.default.copyItem(at: url, to: outputUrl, overwrite: true)
-				} catch {
-					self.presentError(error)
+				// Give the system time to close the sheet.
+				DispatchQueue.main.async {
+					do {
+						try FileManager.default.copyItem(at: url, to: outputUrl, overwrite: true)
+					} catch {
+						error.presentAsModalSheet(for: self.view.window)
+					}
 				}
 			}
 		}
@@ -148,6 +155,11 @@ final class ConversionCompletedViewController: NSViewController {
 	private func setUpDropView() {
 		let videoDropController = VideoDropViewController(dropLabelIsHidden: true)
 		add(childController: videoDropController)
+	}
+
+	@IBAction private func backButton(_ sender: NSButton) {
+		// It's safe to force-unwrap as there's no scenario where it will be nil.
+		push(viewController: AppDelegate.shared.previousEditViewController!)
 	}
 }
 

@@ -6,17 +6,11 @@ import Crashlytics
 @NSApplicationMain
 final class AppDelegate: NSObject, NSApplicationDelegate {
 	lazy var mainWindowController = MainWindowController()
-	var hasFinishedLaunching = false
-	var urlToConvertOnLaunch: URL!
+
+	var previousEditViewController: EditVideoViewController?
 
 	// Possible workaround for crashing bug because of Crashlytics swizzling.
-	var notificationCenter: AnyObject? = {
-		if #available(macOS 10.14, *) {
-			return UNUserNotificationCenter.current()
-		} else {
-			return nil
-		}
-	}()
+	let notificationCenter = UNUserNotificationCenter.current()
 
 	func applicationWillFinishLaunching(_ notification: Notification) {
 		UserDefaults.standard.register(defaults: [
@@ -26,23 +20,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
-		if #available(macOS 10.14, *) {
-			(notificationCenter as? UNUserNotificationCenter)?.requestAuthorization { _, _ in }
-		}
-
 		#if !DEBUG
 			Fabric.with([Crashlytics.self])
 		#endif
 
+		notificationCenter.requestAuthorization { _, _ in }
+
 		mainWindowController.showWindow(self)
 
-		hasFinishedLaunching = true
 		NSApp.isAutomaticCustomizeTouchBarMenuItemEnabled = true
 		NSApp.servicesProvider = self
 
-		if urlToConvertOnLaunch != nil {
-			mainWindowController.convert(urlToConvertOnLaunch)
-		}
+		// Set launch completions option if the notification center could not be set up already
+		LaunchCompletions.applicationDidLaunch()
 	}
 
 	/// Returns `nil` if it should not continue.
@@ -81,13 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			return
 		}
 
-		// TODO: Simplify this. Make a function that calls the input when the app finished launching, or right away if it already has.
-		if hasFinishedLaunching {
-			mainWindowController.convert(videoUrl2)
-		} else {
-			// This method is called before `applicationDidFinishLaunching`,
-			// so we buffer it up a video is "Open with" this app
-			urlToConvertOnLaunch = videoUrl2
+		// Start video conversion on launch
+		LaunchCompletions.add { [weak self] in
+			self?.mainWindowController.convert(videoUrl2)
 		}
 	}
 

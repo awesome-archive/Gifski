@@ -1,4 +1,7 @@
 import AppKit
+import CircularProgress
+import DockProgress
+import Defaults
 
 final class ConversionViewController: NSViewController {
 	private lazy var circularProgress = with(CircularProgress(size: 160.0)) {
@@ -18,6 +21,7 @@ final class ConversionViewController: NSViewController {
 	private var conversion: Gifski.Conversion!
 	private var progress: Progress?
 	private var isRunning = false
+	private let gifski = Gifski()
 
 	convenience init(conversion: Gifski.Conversion) {
 		self.init()
@@ -33,10 +37,10 @@ final class ConversionViewController: NSViewController {
 
 		circularProgress.constrain(to: CGSize(widthHeight: circularProgress.frame.width))
 		circularProgress.center(inView: wrapper)
+		timeRemainingLabel.centerX(inView: circularProgress)
+		timeRemainingLabel.constrainToEdges(verticalEdge: .bottom, view: wrapper, padding: -16)
 		NSLayoutConstraint.activate([
-			timeRemainingLabel.topAnchor.constraint(greaterThanOrEqualTo: circularProgress.bottomAnchor),
-			timeRemainingLabel.centerXAnchor.constraint(equalTo: circularProgress.centerXAnchor),
-			timeRemainingLabel.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor, constant: -16.0)
+			timeRemainingLabel.topAnchor.constraint(greaterThanOrEqualTo: circularProgress.bottomAnchor)
 		])
 
 		view = wrapper
@@ -52,12 +56,6 @@ final class ConversionViewController: NSViewController {
 
 	/// Gets called when the Esc key is pressed.
 	override func cancelOperation(_ sender: Any?) {
-		cancelConversion()
-	}
-
-	// TODO: Remove this when we target macOS 10.14.
-	@objc
-	func cancel(_ sender: Any?) {
 		cancelConversion()
 	}
 
@@ -77,7 +75,7 @@ final class ConversionViewController: NSViewController {
 		timeRemainingEstimator.start()
 
 		progress?.performAsCurrent(withPendingUnitCount: 1) { [weak self] in
-			Gifski.run(conversion) { result in
+			gifski.run(conversion) { result in
 				guard let self = self else {
 					return
 				}
@@ -92,7 +90,7 @@ final class ConversionViewController: NSViewController {
 				} catch Gifski.Error.cancelled {
 					self.cancelConversion()
 				} catch {
-					self.presentError(error, modalFor: self.view.window)
+					error.presentAsModalSheet(for: self.view.window)
 					self.cancelConversion()
 				}
 			}
@@ -111,9 +109,9 @@ final class ConversionViewController: NSViewController {
 			progress?.cancel()
 		}
 
-		let videoDropController = VideoDropViewController()
 		stopConversion { [weak self] in
-			self?.push(viewController: videoDropController)
+			// It's safe to force-unwrap as there's no scenario where it will be nil.
+			self?.push(viewController: AppDelegate.shared.previousEditViewController!)
 		}
 	}
 

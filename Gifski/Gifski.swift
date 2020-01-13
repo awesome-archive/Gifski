@@ -5,6 +5,7 @@ import Crashlytics
 final class Gifski {
 	enum Error: LocalizedError {
 		case invalidSettings
+		case unreadableFile
 		case generateFrameFailed(Swift.Error)
 		case addFrameFailed(Swift.Error)
 		case writeFailed(Swift.Error)
@@ -14,6 +15,8 @@ final class Gifski {
 			switch self {
 			case .invalidSettings:
 				return "Invalid settings"
+			case .unreadableFile:
+				return "The selected file is no longer readable"
 			case let .generateFrameFailed(error):
 				return "Failed to generate frame: \(error.localizedDescription)"
 			case let .addFrameFailed(error):
@@ -36,12 +39,19 @@ final class Gifski {
 
 		// TODO: With Swift 5.1 we can remove the manual `init` and have it synthesized.
 		/**
-		- Parameter frameRate: Clamped to 5...30. Uses the frame rate of `input` if not specified.
+		- Parameter frameRate: Clamped to `5...30`. Uses the frame rate of `input` if not specified.
 		*/
 		/**
 		- Parameter loopGif: Whether output should loop infinitely or not.
 		*/
-		init(video: URL, timeRange: ClosedRange<Double>? = nil, quality: Double = 1, dimensions: CGSize? = nil, frameRate: Int? = nil, loopGif: Bool = true) {
+		init(
+			video: URL,
+			timeRange: ClosedRange<Double>? = nil,
+			quality: Double = 1,
+			dimensions: CGSize? = nil,
+			frameRate: Int? = nil,
+			loopGif: Bool = true
+		) {
 			self.video = video
 			self.timeRange = timeRange
 			self.quality = quality
@@ -51,8 +61,8 @@ final class Gifski {
 		}
 	}
 
-	// This is carefully nil'd and should remain private.
-	private static var gifData: NSMutableData?
+	private var gifData = NSMutableData()
+	private var progress: Progress!
 
 	// TODO: Split this method up into smaller methods. It's too large.
 	/**
@@ -60,17 +70,15 @@ final class Gifski {
 
 	- Parameter completionHandler: Guaranteed to be called on the main thread
 	*/
-	static func run(
+	func run(
 		_ conversion: Conversion,
 		completionHandler: ((Result<Data, Error>) -> Void)?
 	) {
-		var progress = Progress(parent: .current())
+		progress = Progress(parent: .current())
 
 		let completionHandlerOnce = Once().wrap { (_ result: Result<Data, Error>) -> Void in
-			gifData = nil // Resetting state
-
 			DispatchQueue.main.async {
-				guard !progress.isCancelled else {
+				guard !self.progress.isCancelled else {
 					completionHandler?(.failure(.cancelled))
 					return
 				}
@@ -98,8 +106,6 @@ final class Gifski {
 			return progress.isCancelled ? 0 : 1
 		}
 
-		gifData = NSMutableData()
-
 		gifski.setWriteCallback(context: &gifData) { bufferLength, bufferPointer, context in
 			guard
 				bufferLength > 0,
@@ -117,15 +123,23 @@ final class Gifski {
 		DispatchQueue.global(qos: .utility).async {
 			let asset = AVURLAsset(
 				url: conversion.video,
-				options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+				options: [
+					AVURLAssetPreferPreciseDurationAndTimingKey: true
+				]
 			)
 
-			guard asset.isReadable else {
+			guard
+				asset.isReadable,
+				let assetFrameRate = asset.frameRate,
+				let firstVideoTrack = asset.firstVideoTrack,
+
+				// We use the duration of the first video track since the total duration of the asset can actually be longer than the video track. If we use the total duration and the video is shorter, we'll get errors in `generateCGImagesAsynchronously` (#119).
+				// We already extract the video into a new asset in `VideoValidator` if the first video track is shorter than the asset duration, so the handling here is not strictly necessary but kept just to be safe.
+				let videoTrackRange = firstVideoTrack.timeRange.range
+			else {
 				// This can happen if the user selects a file, and then the file becomes
 				// unavailable or deleted before the "Convert" button is clicked.
-				completionHandlerOnce(.failure(.generateFrameFailed(
-					NSError.appError(message: "The selected file is no longer readable")
-				)))
+				completionHandlerOnce(.failure(.unreadableFile))
 				return
 			}
 
@@ -139,29 +153,29 @@ final class Gifski {
 			generator.requestedTimeToleranceBefore = .zero
 			generator.appliesPreferredTrackTransform = true
 
-			progress.cancellationHandler = {
+			self.progress.cancellationHandler = {
 				generator.cancelAllCGImageGeneration()
 			}
 
-			let fps = (conversion.frameRate.map { Double($0) } ?? asset.videoMetadata!.frameRate).clamped(to: 5...30)
-			let startTime = conversion.timeRange?.lowerBound ?? 0.0
-			let duration: Double = {
-				if let timeRange = conversion.timeRange {
-					return timeRange.upperBound - timeRange.lowerBound
-				} else {
-					return asset.duration.seconds
-				}
-			}()
+			let fps = (conversion.frameRate.map { Double($0) } ?? assetFrameRate).clamped(to: Constants.allowedFrameRate)
+			let videoRange = conversion.timeRange?.clamped(to: videoTrackRange) ?? videoTrackRange
+			let startTime = videoRange.lowerBound
+			let duration = videoRange.length
+
 			let frameCount = Int(duration * fps)
-			progress.totalUnitCount = Int64(frameCount)
+			self.progress.totalUnitCount = Int64(frameCount)
 
 			var frameForTimes = [CMTime]()
 			for index in 0..<frameCount {
 				frameForTimes.append(CMTime(seconds: startTime + ((1 / fps) * Double(index)), preferredTimescale: .video))
 			}
 
-			generator.generateCGImagesAsynchronously(forTimePoints: frameForTimes) { result in
-				guard !progress.isCancelled else {
+			generator.generateCGImagesAsynchronously(forTimePoints: frameForTimes) { [weak self] result in
+				guard let self = self else {
+					return
+				}
+
+				guard !self.progress.isCancelled else {
 					completionHandlerOnce(.failure(.cancelled))
 					return
 				}
@@ -197,8 +211,7 @@ final class Gifski {
 					if result.isFinished {
 						do {
 							try gifski.finish()
-							// Force unwrapping here is safe because we nil gifData in one single place after this.
-							completionHandlerOnce(.success(gifData! as Data))
+							completionHandlerOnce(.success(self.gifData as Data))
 						} catch {
 							completionHandlerOnce(.failure(.writeFailed(error)))
 						}
@@ -206,17 +219,7 @@ final class Gifski {
 				case .failure where result.isCancelled:
 					completionHandlerOnce(.failure(.cancelled))
 				case let .failure(error):
-					// TODO: Remove this when we've been able to track down the issue.
-					completionHandlerOnce(.failure(.cancelled))
-					DispatchQueue.main.async {
-						NSAlert.showModal(
-							message: "Gifski was unable generate frames from the video",
-							informativeText: "We have been trying to track down this issue for a long time, but we have been unable to reproduce it. It would be awesome if you could send an email to sindresorhus@gmail.com with the video or some information about the video file you tried to convert so we can fix this issue.",
-							detailText: "\(error)"
-						)
-					}
-
-					// completionHandlerOnce(.failure(.generateFrameFailed(error)))
+					completionHandlerOnce(.failure(.generateFrameFailed(error)))
 				}
 			}
 		}

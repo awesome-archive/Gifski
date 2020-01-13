@@ -1,6 +1,8 @@
 import Cocoa
 
-class DropView: SSView {
+class DropView<CompletionType>: SSView {
+	var onComplete: ((CompletionType) -> Void)?
+
 	var dropText: String? {
 		didSet {
 			if let text = dropText {
@@ -12,6 +14,8 @@ class DropView: SSView {
 		}
 	}
 
+	var dropView: NSView?
+
 	private let dropLabel = with(Label()) {
 		$0.textColor = .secondaryLabelColor
 		$0.font = NSFont.systemFont(ofSize: 14)
@@ -22,11 +26,13 @@ class DropView: SSView {
 	var isDropLabelHidden: Bool = false {
 		didSet {
 			dropLabel.isHidden = isDropLabelHidden
+			dropView?.isHidden = isDropLabelHidden
 		}
 	}
 
 	func fadeInVideoDropLabel() {
 		dropLabel.fadeIn()
+		dropView?.fadeIn()
 	}
 
 	var acceptedTypes: [NSPasteboard.PasteboardType] {
@@ -52,6 +58,10 @@ class DropView: SSView {
 
 	override func didAppear() {
 		addSubviewToCenter(dropLabel)
+
+		if let dropView = dropView {
+			addSubviewToCenter(dropView)
+		}
 	}
 
 	override func layout() {
@@ -105,10 +115,7 @@ class DropView: SSView {
 	}
 }
 
-final class VideoDropView: DropView {
-	// TODO: Any way to make this generic so we can have it in DropView instead?
-	var onComplete: ((URL) -> Void)?
-
+final class VideoDropView: DropView<URL> {
 	override var highlightColor: NSColor { .themeColor }
 
 	override var acceptedTypes: [NSPasteboard.PasteboardType] { [.fileURL] }

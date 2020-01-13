@@ -1,6 +1,7 @@
 import Cocoa
 import AVFoundation
 import Crashlytics
+import DockProgress
 
 final class MainWindowController: NSWindowController {
 	private let videoValidator = VideoValidator()
@@ -17,7 +18,7 @@ final class MainWindowController: NSWindowController {
 		NSAlert.showModal(
 			for: window,
 			message: "Welcome to Gifski!",
-			informativeText: "If you have any feedback, bug reports, or feature requests, kindly use the “Send Feedback” button in the “Help” menu. We will respond to all submissions and reported issues will be dealt with swiftly.\n\nPlease note that it is preferable that you submit a bug report through the feedback button rather than as an App Store review since the App Store will not allow us to contact you for more information regarding the bug."
+			informativeText: "If you have any feedback, bug reports, or feature requests, kindly use the “Send Feedback” button in the “Help” menu. We respond to all submissions and reported issues will be dealt with swiftly. It's preferable that you report bugs this way rather than as an App Store review, since the App Store will not allow us to contact you for more information."
 		)
 	}
 
@@ -47,23 +48,32 @@ final class MainWindowController: NSWindowController {
 		NSApp.activate(ignoringOtherApps: false)
 		window.makeKeyAndOrderFront(nil)
 
-		DockProgress.style = .circle(radius: 55, color: .themeColor)
+		DockProgress.style = .circle(radius: 55)
 
 		showWelcomeScreen()
 	}
 
-	@objc
-	func open(_ sender: AnyObject) {
+	func presentOpenPanel() {
 		let panel = NSOpenPanel()
 		panel.canChooseDirectories = false
 		panel.canCreateDirectories = false
 		panel.allowedFileTypes = System.supportedVideoTypes
 
 		panel.beginSheetModal(for: window!) { [weak self] in
-			if $0 == .OK {
+			guard $0 == .OK else {
+				return
+			}
+
+			// Give the system time to close the sheet.
+			DispatchQueue.main.async {
 				self?.convert(panel.url!)
 			}
 		}
+	}
+
+	@objc
+	func open(_ sender: AnyObject) {
+		presentOpenPanel()
 	}
 
 	func convert(_ inputUrl: URL) {
